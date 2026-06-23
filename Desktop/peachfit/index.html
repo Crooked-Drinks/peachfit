@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="PeachFit">
+<meta name="theme-color" content="#000000">
+<title>PeachFit</title>
+<link rel="manifest" href="manifest.json">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{overscroll-behavior:none;-webkit-overflow-scrolling:touch;font-family:'Press Start 2P',monospace}
+input,select,button{font-family:'Press Start 2P',monospace!important;-webkit-appearance:none;border-radius:0}
+@media all and (display-mode:standalone){body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}}
+@keyframes pls{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+@keyframes slu{0%{transform:translateY(20px);opacity:0}100%{transform:translateY(0);opacity:1}}
+@keyframes blk{0%,100%{opacity:1}50%{opacity:0.3}}
+@keyframes fwb{0%{opacity:1;transform:scale(0)}50%{opacity:1}100%{opacity:0;transform:scale(1.8)}}
+@keyframes titlePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes starTwinkle{0%,100%{opacity:0.3}50%{opacity:1}}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useRef}=React;
+const SK="peachfit_v2",SSK="peachfit_sess";
+const DEF={routines:[],workoutLog:[],nutritionLog:[],prs:{},profile:{weight:"",height:"",age:"",sex:"male"}};
+
+/* ── UTILS ── */
+function calcBMR(p){if(!p||!p.weight||!p.height||!p.age)return null;const w=parseFloat(p.weight),h=parseFloat(p.height),a=parseInt(p.age);if(!w||!h||!a)return null;return Math.round((p.sex==="male"?10*w+6.25*h-5*a+5:10*w+6.25*h-5*a-161)*1.2);}
+function estCal(sets){return sets.reduce((s,x)=>{const r=parseInt(x.reps)||0,w=parseFloat(x.weight)||0;return s+Math.round(r*w*0.05||r*0.3)},0)}
+function td(){return new Date().toISOString().split("T")[0]}
+function fmt(d){return new Date(d).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}
+function est1RM(w,r){return r<=1?w:Math.round(w*(1+r/30))}
+function isPRBetter(w,r,old){if(!old)return true;return est1RM(w,r)>est1RM(old.weight,old.reps)}
+function getLastSets(ex,data){for(let i=data.workoutLog.length-1;i>=0;i--){const f=data.workoutLog[i].exercises.find(e=>e.name===ex);if(f&&f.sets.length>0)return f.sets}return null}
+function getPRPct(ex,data){const pr=data.prs[ex];if(!pr)return null;const sixAgo=new Date();sixAgo.setMonth(sixAgo.getMonth()-6);const cut=sixAgo.toISOString().split("T")[0];let ob=null;data.workoutLog.filter(w=>w.date<=cut).forEach(w=>w.exercises.filter(e=>e.name===ex).forEach(e=>e.sets.forEach(s=>{const sw=parseFloat(s.weight)||0,sr=parseInt(s.reps)||0;if(sw>0&&sr>0&&(!ob||est1RM(sw,sr)>est1RM(ob.weight,ob.reps)))ob={weight:sw,reps:sr}})));if(!ob)return null;return Math.round((est1RM(pr.weight,pr.reps)-est1RM(ob.weight,ob.reps))/est1RM(ob.weight,ob.reps)*100)}
+function mk4(pr,last){return[0,1,2,3].map(i=>{const w=pr?String(pr.weight):"";const gw=last&&last[i]?String(last[i].weight):"";const gr=last&&last[i]?String(last[i].reps):"";return{reps:"",weight:w,gw,gr}})}
+function playChime(){try{const ac=new(window.AudioContext||window.webkitAudioContext)();[659,784,1047,784,1047,1319].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain();o.connect(g);g.connect(ac.destination);o.type="square";o.frequency.value=f;g.gain.value=0.08;o.start(ac.currentTime+i*0.12);o.stop(ac.currentTime+i*0.12+0.1)})}catch(e){}}
+
+/* ── FOOD DB ── */
+const KDB={"chicken breast":165,"chicken thigh":209,"beef mince":250,"steak":271,"bacon":541,"salmon":208,"tuna":132,"cod":82,"shrimp":99,"prawn":99,"egg":155,"eggs":155,"milk":61,"greek yogurt":59,"cheese":402,"butter":717,"cream":195,"white rice":130,"brown rice":112,"rice":130,"pasta":131,"oats":389,"bread":265,"potato":77,"sweet potato":86,"broccoli":34,"spinach":23,"kale":49,"carrot":41,"tomato":18,"onion":40,"mushroom":22,"pepper":31,"cauliflower":25,"banana":89,"apple":52,"orange":47,"avocado":160,"almonds":579,"walnuts":654,"peanut butter":588,"olive oil":884,"lentils":116,"chickpeas":164,"tofu":76,"protein powder":370,"dark chocolate":546,"honey":304,"sugar":387};
+function lookupKcal(n){const k=(n||"").toLowerCase().trim();if(!k)return null;if(KDB[k]!==undefined)return KDB[k];for(const[key,val] of Object.entries(KDB))if(k.includes(key)||key.includes(k))return val;return null}
+
+/* ── EXERCISE DB ── */
+const GYM=["Bench Press","Incline Bench Press","Decline Bench Press","Close Grip Bench Press","Dumbbell Bench Press","Incline Dumbbell Press","Decline Dumbbell Press","Dumbbell Fly","Incline Dumbbell Fly","Cable Fly","Low Cable Fly","High Cable Fly","Chest Press Machine","Pec Deck","Push Up","Diamond Push Up","Wide Push Up","Decline Push Up","Chest Dip","Floor Press","Landmine Press","Deadlift","Sumo Deadlift","Trap Bar Deadlift","Rack Pull","Barbell Row","Pendlay Row","Dumbbell Row","Single Arm Dumbbell Row","Seated Cable Row","Wide Grip Cable Row","T-Bar Row","Chest Supported Row","Lat Pulldown","Wide Grip Lat Pulldown","Close Grip Lat Pulldown","Reverse Grip Lat Pulldown","Straight Arm Pulldown","Pull Up","Chin Up","Neutral Grip Pull Up","Assisted Pull Up","Inverted Row","Cable Pullover","Meadows Row","Seal Row","Helms Row","Machine Row","Hyperextension","Reverse Hyperextension","Overhead Press","Military Press","Seated Overhead Press","Dumbbell Shoulder Press","Arnold Press","Push Press","Lateral Raise","Cable Lateral Raise","Machine Lateral Raise","Leaning Lateral Raise","Front Raise","Cable Front Raise","Rear Delt Fly","Cable Rear Delt Fly","Reverse Pec Deck","Face Pull","Upright Row","Dumbbell Shrug","Barbell Shrug","Lu Raise","Barbell Curl","EZ Bar Curl","Dumbbell Curl","Hammer Curl","Incline Dumbbell Curl","Preacher Curl","Concentration Curl","Cable Curl","Cable Hammer Curl","Bayesian Curl","Spider Curl","Reverse Curl","Drag Curl","Machine Curl","Tricep Pushdown","Rope Pushdown","Overhead Tricep Extension","Cable Overhead Extension","Dumbbell Overhead Extension","Skull Crusher","EZ Bar Skull Crusher","Tricep Dip","Bench Dip","Tricep Kickback","JM Press","Squat","Back Squat","Front Squat","Box Squat","Pause Squat","Goblet Squat","Zercher Squat","Hack Squat","Smith Machine Squat","Leg Press","Single Leg Press","Lunges","Walking Lunges","Reverse Lunges","Dumbbell Lunges","Bulgarian Split Squat","Split Squat","Step Up","Leg Extension","Single Leg Extension","Leg Curl","Seated Leg Curl","Nordic Curl","Romanian Deadlift","Stiff Leg Deadlift","Single Leg Romanian Deadlift","Good Morning","Hip Thrust","Barbell Hip Thrust","Single Leg Hip Thrust","Glute Bridge","Cable Pull Through","Glute Kickback","Hip Abduction Machine","Hip Adduction Machine","Calf Raise","Seated Calf Raise","Standing Calf Raise","Leg Press Calf Raise","Sissy Squat","Pistol Squat","Belt Squat","Plank","Side Plank","Ab Wheel Rollout","Crunch","Cable Crunch","Reverse Crunch","Bicycle Crunch","Sit Up","Weighted Sit Up","Leg Raise","Hanging Leg Raise","Hanging Knee Raise","Lying Leg Raise","Russian Twist","Woodchop","Cable Woodchop","Pallof Press","Dead Bug","Mountain Climber","V Up","Dragon Flag","Kettlebell Swing","Kettlebell Snatch","Kettlebell Clean","Clean and Press","Power Clean","Hang Clean","Thruster","Wall Ball","Battle Ropes","Box Jump","Burpee","Farmer Walk","Sled Push","Sled Pull","Medicine Ball Slam","Rowing Machine","Assault Bike","Ski Erg","Stairmaster","Treadmill Incline Walk"];
+
+/* ── UI COMPONENTS ── */
+const F={fontFamily:"'Press Start 2P',monospace"};
+function Btn({children,onClick,white,small,full,style}){const[p,setP]=useState(false);return<button onClick={onClick} onPointerDown={()=>setP(true)} onPointerUp={()=>setP(false)} onPointerLeave={()=>setP(false)} style={{...F,fontSize:small?7:9,padding:small?"5px 8px":"8px 14px",background:white?(p?"#bbb":"#fff"):(p?"#555":"#222"),color:white?"#000":"#fff",border:"3px solid #fff",boxShadow:p?"none":"3px 3px 0 #fff",cursor:"pointer",transform:p?"translate(3px,3px)":"none",width:full?"100%":undefined,textTransform:"uppercase",letterSpacing:1,lineHeight:1.4,...(style||{})}}>{children}</button>}
+function Inp({value,onChange,onBlur,onFocus,onKeyDown,placeholder,type,disabled,style}){return<input type={type||"text"} value={value} onChange={onChange} onBlur={onBlur} onFocus={onFocus} onKeyDown={onKeyDown} placeholder={placeholder} disabled={disabled} style={{...F,fontSize:8,padding:"8px 10px",background:disabled?"#333":"#fff",color:disabled?"#888":"#000",border:"3px solid #fff",outline:"none",width:"100%",...(style||{})}}/>}
+function Sel({value,onChange,children,style}){return<select value={value} onChange={onChange} style={{...F,fontSize:7,padding:"8px 10px",background:"#222",color:"#fff",border:"3px solid #fff",outline:"none",width:"100%",appearance:"none",...(style||{})}}>{children}</select>}
+function Bx({children,style}){return<div style={{background:"#111",border:"3px solid #fff",padding:"12px 14px",marginBottom:12,...(style||{})}}>{children}</div>}
+function Tl({children}){return<div style={{...F,fontSize:9,color:"#fff",marginBottom:14,borderBottom:"2px solid #fff",paddingBottom:8}}>{children}</div>}
+
+function ExPicker({onSelect}){const[q,setQ]=useState("");const[open,setOpen]=useState(false);
+  const fl=q.length>0?GYM.filter(e=>e.toLowerCase().includes(q.toLowerCase())).slice(0,8):GYM.slice(0,8);
+  return<div style={{position:"relative",flex:1}}><Inp value={q} onChange={e=>{setQ(e.target.value);setOpen(true)}} placeholder="SEARCH EXERCISE" onFocus={()=>setOpen(true)} onKeyDown={e=>{if(e.key==="Enter"&&q.trim()){onSelect(q.trim());setQ("");setOpen(false)}}}/>
+    {open&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:10,background:"#111",border:"3px solid #fff",maxHeight:200,overflowY:"auto"}}>{fl.map(ex=><div key={ex} onPointerDown={e=>{e.preventDefault();onSelect(ex);setQ("");setOpen(false)}} style={{...F,fontSize:6,color:"#fff",padding:"8px 10px",cursor:"pointer",borderBottom:"1px solid #333"}}>{ex.toUpperCase()}</div>)}{fl.length===0&&<div style={{...F,fontSize:6,color:"#555",padding:"8px 10px"}}>NO MATCHES - PRESS ENTER</div>}</div>}</div>}
+
+function ActBtn({name,calPerMin,onLog}){const[open,setOpen]=useState(false);const[mins,setMins]=useState("");const cal=Math.round((parseInt(mins)||0)*calPerMin);
+  return<div><Btn small full onClick={()=>setOpen(!open)} style={{fontSize:6,padding:"8px 4px",marginBottom:open?6:0}}>{name}</Btn>
+    {open&&<div style={{background:"#222",border:"2px solid #fff",padding:"8px",marginTop:4}}><div style={{...F,fontSize:5,color:"#bbb",marginBottom:4}}>MINUTES</div>
+      <Inp type="number" value={mins} onChange={e=>setMins(e.target.value)} placeholder="0" style={{fontSize:7,padding:"6px",marginBottom:6,textAlign:"center"}}/>
+      {mins&&<div style={{...F,fontSize:6,color:"#fff",marginBottom:6,textAlign:"center"}}>~{cal} KCAL</div>}
+      <Btn small full white onClick={()=>{if(cal>0){onLog(cal);setMins("");setOpen(false)}}} style={{fontSize:6}}>LOG</Btn></div>}</div>}
+
+/* ── PR SCREEN ── */
+function PRScreen({prs,onDone}){
+  const[frame,setFrame]=useState(0);const[showPrs,setShowPrs]=useState(false);const[fws,setFws]=useState([]);
+  useEffect(()=>{const iv=setInterval(()=>setFrame(f=>f+1),500);return()=>clearInterval(iv)},[]);
+  useEffect(()=>{const t=setTimeout(()=>setShowPrs(true),800);return()=>clearTimeout(t)},[]);
+  useEffect(()=>{const mk=()=>Array.from({length:14},(_,i)=>({id:Date.now()+i,x:Math.random()*100,y:Math.random()*40,ps:Array.from({length:10},()=>({dx:(Math.random()-.5)*44,dy:(Math.random()-.5)*44,s:2+Math.random()*3}))}));setFws(mk());const iv=setInterval(()=>setFws(mk()),1300);return()=>clearInterval(iv)},[]);
+  const flexL=frame%2===0;
+  const pf=["    11111111    ","   1122221111   ","    11111111    ","   3333333333   ","  333333333333  "," 33334444433333 "," 33344444443333 ","  3344544543333 ","  3344444443333 ","  3334446443333 ","   334444433    ","   333777333    ","  33 3333 333   ","  33  44  333   ",flexL?"82 88888888  28 ":" 28 88888888 82 ",flexL?"8  8899998882  8":"8  2889999888  8",flexL?"82  88888888  28":" 28 88888888 82 ","    88888888    ","   8888888888   ","  888888888888  ","  888888888888  "," 8888888888888  ","  888888888888  ","    44   44     "];
+  const pc={"1":"#fff","2":"#ddd","3":"#999","4":"#ccc","5":"#555","7":"#888","8":"#bbb","9":"#eee"};
+  return<div style={{textAlign:"center",padding:"12px 8px",position:"relative",overflow:"hidden",minHeight:460}}>
+    {fws.map(fw=><div key={fw.id} style={{position:"absolute",left:fw.x+"%",top:fw.y+"%"}}>{fw.ps.map((p,i)=><div key={i} style={{position:"absolute",width:p.s,height:p.s,background:"#fff",left:p.dx,top:p.dy,animation:`fwb 1s ${i*0.04}s ease-out forwards`}}/>)}</div>)}
+    <div style={{marginBottom:14,animation:"pls 1s infinite"}}><div style={{...F,fontSize:11,color:"#fff",letterSpacing:2}}>★ ΝΕΟ ΡΕΚΟΡ! ★</div></div>
+    <div style={{display:"flex",justifyContent:"center",marginBottom:16}}><svg width="96" height="144" viewBox="0 0 16 24" style={{imageRendering:"pixelated"}}>{pf.map((row,y)=>row.split("").map((c,x)=>c!==" "?<rect key={x+"-"+y} x={x} y={y} width="1" height="1" fill={pc[c]||"#fff"}/>:null))}</svg></div>
+    <div style={{...F,fontSize:7,color:"#bbb",marginBottom:4,animation:"blk 1.5s infinite"}}>GET IT GURL!</div>
+    <div style={{...F,fontSize:6,color:"#888",marginBottom:14}}>PERSONAL BEST!</div>
+    {showPrs&&prs.map((p,i)=><div key={p.ex} style={{animation:`slu 0.4s ${i*0.25}s both ease-out`}}><Bx style={{marginBottom:8}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{...F,fontSize:7,color:"#fff"}}>★ {p.ex.toUpperCase()}</span><span style={{...F,fontSize:8,color:"#fff"}}>{p.weight}kg x{p.reps}</span></div></Bx></div>)}
+    <div style={{marginTop:12,display:"flex",justifyContent:"center",gap:6,marginBottom:6}}>{[0,1,2,3,4].map(i=><div key={i} style={{width:8,height:8,background:"#fff",animation:`pls 0.5s ${i*0.1}s infinite`}}/>)}</div>
+    <div style={{...F,fontSize:6,color:"#555",marginBottom:10,animation:"blk 2s infinite"}}>PRESS CONTINUE</div>
+    <Btn white onClick={onDone}>CONTINUE</Btn></div>}
+
+/* ── TITLE SCREEN ── */
+function TitleScreen({onStart}){
+  const peach=["    11111111    ","   1122221111   ","    11111111    ","   3333333333   ","  333333333333  "," 33334444433333 "," 33344444443333 ","  3344544543333 ","  3344444443333 ","  3334446443333 ","   334444433    ","   333777333    ","  33 3333 333   ","  33  44  333   ","    88888888    ","   8899998888   ","    88888888    ","    88888888    ","   8888888888   ","  888888888888  ","  888888888888  "," 8888888888888  ","  888888888888  ","    44   44     "];
+  const pc={"1":"#fff","2":"#ddd","3":"#999","4":"#ccc","5":"#555","7":"#888","8":"#bbb","9":"#eee"};
+  return<div style={{background:"#000",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"40px 20px",overflow:"hidden"}}>
+    {Array.from({length:20},(_,i)=><div key={i} style={{position:"fixed",left:(i*37%100)+"%",top:(i*23%80)+"%",width:i%3===0?3:2,height:i%3===0?3:2,background:"#fff",animation:`starTwinkle ${1.5+i%3*0.5}s ${i*0.2}s infinite`}}/>)}
+    <div style={{marginBottom:24,animation:"float 2s ease-in-out infinite"}}><svg width="64" height="96" viewBox="0 0 16 24" style={{imageRendering:"pixelated"}}>{peach.map((row,y)=>row.split("").map((c,x)=>c!==" "?<rect key={x+"-"+y} x={x} y={y} width="1" height="1" fill={pc[c]}/>:null))}</svg></div>
+    <div style={{...F,fontSize:18,color:"#fff",marginBottom:40,animation:"titlePulse 2s ease-in-out infinite",textAlign:"center"}}>PEACHFIT</div>
+    <div style={{animation:"float 3s ease-in-out infinite"}}><Btn white onClick={onStart} style={{fontSize:12,padding:"14px 40px",boxShadow:"4px 4px 0 #fff"}}>START</Btn></div>
+    <div style={{...F,fontSize:6,color:"#555",marginTop:24,animation:"blink 1.5s infinite"}}>PRESS START</div>
+    <div style={{position:"fixed",bottom:0,left:0,right:0,display:"flex"}}>{Array.from({length:30},(_,i)=><div key={i} style={{flex:1,height:20,background:i%2===0?"#444":"#222",borderTop:"2px solid #666",borderRight:"1px solid #333"}}/>)}</div></div>}
+
+/* ── MAIN APP ── */
+function App(){
+  const[tab,setTab]=useState("workout");
+  const[data,setData]=useState(DEF);
+  const[ok,setOk]=useState(false);
+  const[started,setStarted]=useState(false);
+  const[sess,setSess]=useState(null);
+
+  useEffect(()=>{
+    try{
+      const s=localStorage.getItem(SK);
+      if(s){const d=JSON.parse(s);
+        // migrate old PR format (number → object)
+        if(d.prs){const first=Object.values(d.prs)[0];if(typeof first==="number"){const np={};Object.entries(d.prs).forEach(([k,v])=>{np[k]={weight:v,reps:1,date:td()}});d.prs=np}}
+        setData(d)}
+    }catch{}
+    try{const ss=localStorage.getItem(SSK);if(ss){setSess(JSON.parse(ss));setStarted(true)}}catch{}
+    setOk(true);
+  },[]);
+  useEffect(()=>{if(ok)try{localStorage.setItem(SK,JSON.stringify(data))}catch{}},[data,ok]);
+
+  const upd=fn=>setData(d=>({...d,...fn(d)}));
+  const saveSess=s=>{setSess(s);if(s)localStorage.setItem(SSK,JSON.stringify(s));else localStorage.removeItem(SSK)};
+
+  const ws=(()=>{const n=new Date(),d=n.getDay(),m=new Date(n);m.setDate(n.getDate()-(d===0?6:d-1));m.setHours(0,0,0,0);return m.toISOString().split("T")[0]})();
+  const wW=data.workoutLog.filter(w=>w.date>=ws).length;
+  const wP=data.workoutLog.filter(w=>w.date>=ws).reduce((c,w)=>c+w.exercises.filter(e=>e.sets&&e.sets.length>0&&data.prs[e.name]).length,0);
+
+  if(!started)return<TitleScreen onStart={()=>setStarted(true)}/>;
+
+  return<div style={{background:"#888",minHeight:"100vh",padding:"0 0 40px"}}>
+    <div style={{background:"#000",borderBottom:"4px solid #fff",padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div style={{...F,fontSize:10,color:"#fff"}}>PEACHFIT</div>
+      <div style={{display:"flex",alignItems:"center",gap:2}}><svg width="12" height="12" viewBox="0 0 12 12" style={{imageRendering:"pixelated"}}><rect x="1" y="0" width="4" height="2" fill="#cc0000"/><rect x="7" y="0" width="4" height="2" fill="#cc0000"/><rect x="0" y="2" width="12" height="4" fill="#ff0000"/><rect x="1" y="6" width="10" height="2" fill="#cc0000"/><rect x="2" y="8" width="8" height="2" fill="#990000"/><rect x="4" y="10" width="4" height="2" fill="#660000"/></svg><span style={{...F,fontSize:10,color:"#fff"}}>x{wW}</span></div>
+      <div style={{display:"flex",alignItems:"center",gap:2}}><svg width="12" height="12" viewBox="0 0 12 12" style={{imageRendering:"pixelated"}}><rect x="3" y="0" width="6" height="1" fill="#daa520"/><rect x="2" y="1" width="8" height="1" fill="#ffd700"/><rect x="1" y="2" width="10" height="8" fill="#ffd700"/><rect x="4" y="4" width="1" height="4" fill="#ffec8b"/><rect x="6" y="4" width="2" height="4" fill="#ffec8b"/><rect x="2" y="10" width="8" height="1" fill="#daa520"/><rect x="3" y="11" width="6" height="1" fill="#b8860b"/></svg><span style={{...F,fontSize:10,color:"#fff"}}>x{wP}</span></div>
+    </div>
+    <div style={{maxWidth:560,margin:"0 auto",padding:"0 12px"}}>
+      <div style={{display:"flex",gap:4}}>{[["workout","WORLD"],["nutrition","ITEMS"],["history","SCORES"]].map(([k,l])=><button key={k} onClick={()=>setTab(k)} style={{...F,flex:1,padding:"10px 4px",fontSize:8,background:tab===k?"#fff":"#333",color:tab===k?"#000":"#fff",border:"3px solid #fff",borderBottom:tab===k?"3px solid #fff":"3px solid #000",cursor:"pointer",position:"relative",zIndex:tab===k?2:1}}>{l}</button>)}</div>
+      <div style={{background:"#000",border:"4px solid #fff",borderTop:"4px solid #fff",padding:"16px 12px"}}>
+        {tab==="workout"&&<WorkoutTab data={data} upd={upd} sess={sess} saveSess={saveSess}/>}
+        {tab==="nutrition"&&<NutritionTab data={data} upd={upd}/>}
+        {tab==="history"&&<HistoryTab data={data} upd={upd}/>}
+      </div>
+      <div style={{background:"#333",borderTop:"4px solid #000",display:"flex"}}>{Array.from({length:14},(_,i)=><div key={i} style={{flex:1,height:20,background:i%2===0?"#444":"#222",borderRight:"2px solid #000"}}/>)}</div>
+    </div></div>}
+
+/* ── WORKOUT TAB ── */
+function WorkoutTab({data,upd,sess,saveSess}){
+  const[screen,setScreen]=useState(sess?"session":"list");
+  const[editR,setEditR]=useState(null);
+  const[sessId,setSessId]=useState(sess?.routineId||null);
+
+  if(screen==="edit"&&editR)return<EditRoutine routine={editR} data={data} upd={upd} onBack={()=>{setEditR(null);setScreen("list")}}/>;
+  if(screen==="session")return<Session routineId={sessId||sess?.routineId} data={data} upd={upd} sess={sess} saveSess={saveSess} onDone={()=>{saveSess(null);setSessId(null);setScreen("list")}}/>;
+
+  return<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><Tl>MY ROUTINES</Tl><Btn small onClick={()=>{setEditR({id:Date.now(),name:"",exercises:[]});setScreen("edit")}}>+ NEW</Btn></div>
+    {data.routines.length===0&&<Bx><div style={{...F,fontSize:8,color:"#bbb",textAlign:"center",lineHeight:2}}>NO ROUTINES YET</div></Bx>}
+    {data.routines.map(r=><Bx key={r.id} style={{marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div><div style={{...F,fontSize:9,color:"#fff",marginBottom:6}}>{(r.name||"UNNAMED").toUpperCase()}</div><div style={{...F,fontSize:7,color:"#888"}}>{r.exercises.length} MOVES</div></div>
+      <div style={{display:"flex",gap:6}}><Btn small onClick={()=>{setEditR({...r,exercises:[...r.exercises]});setScreen("edit")}}>EDIT</Btn><Btn small white onClick={()=>{setSessId(r.id);setScreen("session")}}>START!</Btn></div></div></Bx>)}</div>}
+
+function EditRoutine({routine,data,upd,onBack}){const[r,setR]=useState(routine);
+  return<div><Btn small onClick={onBack} style={{marginBottom:14}}>BACK</Btn><Tl>EDIT ROUTINE</Tl>
+    <div style={{marginBottom:12}}><div style={{...F,fontSize:6,color:"#bbb",marginBottom:6}}>NAME</div><Inp value={r.name} onChange={e=>setR({...r,name:e.target.value})} placeholder="E.G. PUSH DAY"/></div>
+    <div style={{...F,fontSize:7,color:"#fff",marginBottom:10}}>EXERCISES</div>
+    {r.exercises.map((ex,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><span style={{...F,fontSize:7,color:"#fff",flex:1}}>{ex.toUpperCase()}</span><Btn small onClick={()=>setR({...r,exercises:r.exercises.filter((_,j)=>j!==i)})}>DEL</Btn></div>)}
+    <div style={{display:"flex",gap:8,marginTop:8}}><ExPicker onSelect={ex=>setR({...r,exercises:[...r.exercises,ex]})}/></div>
+    <div style={{display:"flex",justifyContent:"space-between",marginTop:20}}><Btn small onClick={()=>{upd(d=>({routines:d.routines.filter(x=>x.id!==r.id)}));onBack()}}>DELETE</Btn>
+      <Btn white onClick={()=>{upd(d=>({routines:d.routines.find(x=>x.id===r.id)?d.routines.map(x=>x.id===r.id?r:x):[...d.routines,r]}));onBack()}}>SAVE</Btn></div></div>}
+
+/* ── ACTIVE SESSION ── */
+function Session({routineId,data,upd,sess,saveSess,onDone}){
+  const routine=data.routines.find(r=>r.id===routineId)||{name:"?",exercises:[]};
+  const[exercises,setExercises]=useState(()=>sess?.exercises||[...routine.exercises]);
+  const[sets,setSets]=useState(()=>{if(sess?.sets)return sess.sets;const o={};routine.exercises.forEach(e=>{o[e]=mk4(data.prs[e],getLastSets(e,data))});return o});
+  const[done,setDone]=useState(()=>{if(sess?.done)return sess.done;const o={};routine.exercises.forEach(e=>{o[e]=[false,false,false,false]});return o});
+  const[tDur,setTDur]=useState(sess?.tDur||60);
+  const[tSec,setTSec]=useState(0);const[tOn,setTOn]=useState(false);
+  const[prResult,setPrResult]=useState(null);const[addMode,setAddMode]=useState(false);
+  const iv=useRef(null);
+
+  // persist session on changes
+  useEffect(()=>{saveSess({routineId,exercises,sets,done,tDur})},[exercises,sets,done,tDur]);
+
+  // timer
+  useEffect(()=>{if(tOn){iv.current=setInterval(()=>setTSec(s=>{if(s<=1){clearInterval(iv.current);setTOn(false);playChime();return 0}return s-1}),1000)}return()=>clearInterval(iv.current)},[tOn]);
+  function startTimer(){setTSec(tDur);setTOn(true)}
+  function updSet(ex,si,f,v){setSets(p=>{const a=[...p[ex]];a[si]={...a[si],[f]:v};return{...p,[ex]:a}})}
+  function carryWeight(ex,si){setSets(p=>{const a=[...p[ex]];const w=a[si].weight;if(!w)return p;for(let i=si+1;i<a.length;i++)if(a[i].weight==="")a[i]={...a[i],weight:w};return{...p,[ex]:a}})}
+  function toggleDone(ex,si){setDone(p=>{const a=[...p[ex]];a[si]=!a[si];return{...p,[ex]:a}});if(!done[ex][si])startTimer()}
+  function removeEx(ex){setExercises(p=>p.filter(e=>e!==ex));setSets(p=>{const c={...p};delete c[ex];return c});setDone(p=>{const c={...p};delete c[ex];return c});upd(d=>({routines:d.routines.map(r=>r.id===routineId?{...r,exercises:r.exercises.filter(e=>e!==ex)}:r)}))}
+  function addEx(n){if(!n)return;setExercises(p=>[...p,n]);setSets(p=>({...p,[n]:mk4(data.prs[n],getLastSets(n,data))}));setDone(p=>({...p,[n]:[false,false,false,false]}));upd(d=>({routines:d.routines.map(r=>r.id===routineId?{...r,exercises:[...r.exercises,n]}:r)}));setAddMode(false)}
+
+  function finish(){
+    const newPrs={...data.prs};const found=[];
+    const exData=exercises.map(ex=>{
+      const cs=(sets[ex]||[]).filter((s,i)=>done[ex]&&done[ex][i]&&s.reps&&s.weight);
+      let best=null;cs.forEach(s=>{const w=parseFloat(s.weight),r=parseInt(s.reps);if(w>0&&r>0&&(!best||isPRBetter(w,r,best)))best={weight:w,reps:r}});
+      if(best&&isPRBetter(best.weight,best.reps,newPrs[ex])){newPrs[ex]={weight:best.weight,reps:best.reps,date:td()};found.push({ex,weight:best.weight,reps:best.reps})}
+      return{name:ex,sets:cs,calories:estCal(cs)}});
+    const total=exData.reduce((s,e)=>s+e.calories,0);
+    upd(d=>({workoutLog:[...d.workoutLog,{id:Date.now(),date:td(),routineName:routine.name,exercises:exData,totalCalories:total}],prs:newPrs,
+      nutritionLog:d.nutritionLog.map(n=>n.date===td()?{...n,burned:(n.burned||0)+total}:n)}));
+    saveSess(null);if(found.length>0)setPrResult(found);else onDone()}
+
+  if(prResult)return<PRScreen prs={prResult} onDone={onDone}/>;
+
+  return<div>
+    <Btn small onClick={()=>{if(confirm("Quit workout? Progress will be lost.")){saveSess(null);onDone()}}} style={{marginBottom:10}}>QUIT</Btn>
+    <div style={{...F,fontSize:10,color:"#fff",marginBottom:2}}>{routine.name.toUpperCase()}</div>
+    <div style={{...F,fontSize:7,color:"#888",marginBottom:14}}>{fmt(td())}</div>
+    {/* Sticky timer */}
+    <div style={{position:"sticky",top:0,zIndex:20,background:"#000",borderBottom:"3px solid #fff",padding:"10px 12px",marginBottom:14,marginLeft:-12,marginRight:-12,paddingLeft:12,paddingRight:12}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <span style={{...F,fontSize:7,color:"#bbb"}}>REST</span>
+        <Sel value={tDur} onChange={e=>setTDur(+e.target.value)} style={{width:80}}>{[30,45,60,90,120,180].map(s=><option key={s} value={s}>{s}S</option>)}</Sel>
+        <Btn small onClick={startTimer}>GO!</Btn>
+        {tOn&&<span style={{...F,fontSize:16,color:tSec<=10?"#bbb":"#fff",minWidth:50}}>{tSec}s</span>}
+        {!tOn&&tSec===0&&<span style={{...F,fontSize:5,color:"#555"}}>AUTO ON LOG</span>}
+      </div></div>
+
+    {exercises.map(ex=>{const pr=data.prs[ex];const pct=getPRPct(ex,data);return<Bx key={ex} style={{marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <span style={{...F,fontSize:8,color:"#fff"}}>{ex.toUpperCase()}</span>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          {pr&&<span style={{...F,fontSize:6,color:"#bbb"}}>★{pr.weight}x{pr.reps}</span>}
+          {pct!==null&&<span style={{...F,fontSize:5,color:pct>=0?"#bbb":"#888"}}>{pct>=0?"+":""}{pct}%</span>}
+          <span style={{...F,fontSize:7,color:"#888"}}>{(done[ex]||[]).filter(Boolean).length}/4</span>
+          <Btn small onClick={()=>removeEx(ex)} style={{padding:"3px 6px",fontSize:6}}>DEL</Btn></div></div>
+      <div style={{display:"grid",gridTemplateColumns:"18px 1fr 1fr 72px",gap:5,marginBottom:6}}>
+        {["#","REPS","KG",""].map((h,i)=><span key={i} style={{...F,fontSize:5,color:"#555"}}>{h}</span>)}</div>
+      {(sets[ex]||[]).map((s,si)=>{const isDone=done[ex]&&done[ex][si];return<div key={si} style={{display:"grid",gridTemplateColumns:"18px 1fr 1fr 72px",gap:5,marginBottom:6,alignItems:"center",opacity:isDone?0.5:1}}>
+        <span style={{...F,fontSize:7,color:"#fff",textAlign:"center"}}>{si+1}</span>
+        <Inp type="number" value={s.reps} onChange={e=>updSet(ex,si,"reps",e.target.value)} placeholder={s.gr||"0"} disabled={isDone} style={{padding:"6px 4px",fontSize:6,textAlign:"center"}}/>
+        <Inp type="number" value={s.weight} onChange={e=>updSet(ex,si,"weight",e.target.value)} onBlur={()=>carryWeight(ex,si)} placeholder={s.gw||"0"} disabled={isDone} style={{padding:"6px 4px",fontSize:6,textAlign:"center"}}/>
+        <Btn small white={isDone} onClick={()=>toggleDone(ex,si)} style={{fontSize:6,padding:"6px 2px"}}>{isDone?"DONE":"LOG"}</Btn></div>})}</Bx>})}
+
+    {addMode?<Bx style={{marginBottom:14}}><div style={{...F,fontSize:7,color:"#bbb",marginBottom:8}}>ADD EXERCISE</div>
+      <div style={{display:"flex",gap:6}}><ExPicker onSelect={addEx}/><Btn small onClick={()=>setAddMode(false)}>X</Btn></div></Bx>
+      :<div style={{marginBottom:14,textAlign:"center"}}><Btn small onClick={()=>setAddMode(true)}>+ EXERCISE</Btn></div>}
+    <Btn full white onClick={finish} style={{fontSize:10,padding:"12px"}}>FINISH!</Btn></div>}
+
+/* ── NUTRITION TAB ── */
+function NutritionTab({data,upd}){
+  const[showProf,setShowProf]=useState(false);const[prof,setProf]=useState(data.profile||DEF.profile);
+  const[mealName,setMealName]=useState("");const[ings,setIngs]=useState([{name:"",grams:"",kp:"",auto:false}]);
+  const bmr=calcBMR(data.profile||DEF.profile);const tLog=data.nutritionLog.find(n=>n.date===td());
+  const meals=tLog?.meals||[];const wBurn=tLog?.burned||0;const actBurn=(tLog?.activities||[]).reduce((s,a)=>s+(a.calories||0),0);
+  const tBurn=wBurn+actBurn+(bmr||0);const consumed=meals.reduce((s,m)=>s+(m.calories||0),0);const bal=consumed-tBurn;
+  function ingCal(ing){return Math.round((parseFloat(ing.grams)||0)*(parseFloat(ing.kp)||0)/100)}
+  const mealTot=ings.reduce((s,i)=>s+ingCal(i),0);
+  function updIng(i,f,v){setIngs(prev=>prev.map((ing,idx)=>{if(idx!==i)return ing;const u={...ing,[f]:v};if(f==="name"){const fnd=lookupKcal(v);u.auto=fnd!==null;if(fnd!==null&&!ing.kp)u.kp=String(fnd)}return u}))}
+  function addMeal(){if(!mealName.trim())return;const valid=ings.filter(i=>i.name&&i.grams);if(!valid.length)return;
+    const entry={name:mealName,calories:mealTot,ingredients:valid.map(i=>({name:i.name,grams:parseFloat(i.grams),kcalPer100:parseFloat(i.kp)||0,calories:ingCal(i)}))};
+    upd(d=>{const ex=d.nutritionLog.find(n=>n.date===td());if(ex)return{nutritionLog:d.nutritionLog.map(n=>n.date===td()?{...n,meals:[...(n.meals||[]),entry]}:n)};return{nutritionLog:[...d.nutritionLog,{date:td(),meals:[entry],burned:0}]}});
+    setMealName("");setIngs([{name:"",grams:"",kp:"",auto:false}])}
+
+  return<div><Tl>POWER-UPS</Tl>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginBottom:16}}>
+      {[["EATEN",consumed+" kcal"],["BURNED",tBurn+" kcal"],["BALANCE",(bal>0?"+":"")+bal]].map(([l,v])=>
+        <div key={l} style={{background:"#111",border:"3px solid #fff",padding:"10px 8px",textAlign:"center",boxShadow:"3px 3px 0 #fff"}}><div style={{...F,fontSize:7,color:"#888",marginBottom:6}}>{l}</div><div style={{...F,fontSize:9,color:"#fff"}}>{v}</div></div>)}</div>
+    {bmr&&<Bx style={{marginBottom:12,padding:"10px 12px"}}><span style={{...F,fontSize:7,color:"#bbb"}}>BMR: {bmr}{wBurn>0?` + GYM: ${wBurn}`:""}{actBurn>0?` + ACT: ${actBurn}`:""}</span></Bx>}
+    <Bx style={{marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:showProf?14:0}}><span style={{...F,fontSize:8,color:"#fff"}}>PLAYER STATS</span><Btn small onClick={()=>setShowProf(!showProf)}>{showProf?"CLOSE":bmr?"EDIT":"SET UP"}</Btn></div>
+      {!bmr&&!showProf&&<div style={{...F,fontSize:7,color:"#888",marginTop:8}}>ADD STATS FOR BMR</div>}
+      {bmr&&!showProf&&<div style={{...F,fontSize:7,color:"#bbb",marginTop:8}}>{data.profile.weight}KG {data.profile.height}CM {data.profile.age}YRS</div>}
+      {showProf&&<div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+        {[["WEIGHT KG","weight"],["HEIGHT CM","height"],["AGE","age"]].map(([l,k])=><div key={k}><div style={{...F,fontSize:6,color:"#bbb",marginBottom:4}}>{l}</div><Inp type="number" value={prof[k]} onChange={e=>setProf({...prof,[k]:e.target.value})} placeholder="0"/></div>)}
+        <div><div style={{...F,fontSize:6,color:"#bbb",marginBottom:4}}>SEX</div><Sel value={prof.sex} onChange={e=>setProf({...prof,sex:e.target.value})}><option value="male">MALE</option><option value="female">FEMALE</option></Sel></div></div>
+        <div style={{display:"flex",justifyContent:"flex-end",marginTop:10}}><Btn white onClick={()=>{upd(()=>({profile:prof}));setShowProf(false)}}>SAVE</Btn></div></div>}</Bx>
+    <div style={{...F,fontSize:8,color:"#fff",marginBottom:10}}>LOG ACTIVITY</div>
+    <Bx style={{marginBottom:16}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+      {[["RUN",10],["CYCLE",8],["WALK",5]].map(([name,cpm])=><ActBtn key={name} name={name} calPerMin={cpm} onLog={cal=>{upd(d=>{const ex=d.nutritionLog.find(n=>n.date===td());const act={name,calories:cal,time:new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})};if(ex)return{nutritionLog:d.nutritionLog.map(n=>n.date===td()?{...n,burned:(n.burned||0)+cal,activities:[...(n.activities||[]),act]}:n)};return{nutritionLog:[...d.nutritionLog,{date:td(),meals:[],burned:cal,activities:[act]}]}})}}/>)}</div></Bx>
+    <div style={{...F,fontSize:8,color:"#fff",marginBottom:10}}>LOG MEAL</div>
+    <Bx style={{marginBottom:16}}>
+      <div style={{marginBottom:10}}><div style={{...F,fontSize:6,color:"#bbb",marginBottom:4}}>MEAL NAME</div><Inp placeholder="E.G. LUNCH" value={mealName} onChange={e=>setMealName(e.target.value)}/></div>
+      <div style={{...F,fontSize:6,color:"#bbb",marginBottom:6}}>INGREDIENTS</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 58px 52px 28px",gap:4,marginBottom:4}}>{["ITEM","GRAMS","KCL/100",""].map((h,i)=><span key={i} style={{...F,fontSize:5,color:"#555"}}>{h}</span>)}</div>
+      {ings.map((ing,i)=><div key={i}><div style={{display:"grid",gridTemplateColumns:"1fr 58px 52px 28px",gap:4,marginBottom:4,alignItems:"center"}}>
+        <Inp placeholder="FOOD" value={ing.name} onChange={e=>updIng(i,"name",e.target.value)} style={{padding:"5px 6px",fontSize:6}}/>
+        <Inp type="number" placeholder="100" value={ing.grams} onChange={e=>updIng(i,"grams",e.target.value)} style={{padding:"5px 4px",fontSize:6,textAlign:"center"}}/>
+        <Inp type="number" placeholder="?" value={ing.kp} onChange={e=>updIng(i,"kp",e.target.value)} style={{padding:"5px 4px",fontSize:6,textAlign:"center",background:ing.auto?"#333":"#fff",color:ing.auto?"#fff":"#000"}}/>
+        <Btn small onClick={()=>setIngs(p=>p.filter((_,j)=>j!==i))} style={{padding:"3px 4px",fontSize:6}}>X</Btn></div>
+        {ing.name&&ing.grams&&ing.kp&&<div style={{...F,fontSize:6,color:"#bbb",textAlign:"right",marginBottom:4}}>= {ingCal(ing)} KCAL</div>}</div>)}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}><Btn small onClick={()=>setIngs(p=>[...p,{name:"",grams:"",kp:"",auto:false}])}>+ ADD</Btn><span style={{...F,fontSize:8,color:"#fff"}}>TOTAL: {mealTot}</span></div>
+      <Btn full white onClick={addMeal} style={{marginTop:10,fontSize:8}}>LOG MEAL</Btn></Bx>
+    <div style={{...F,fontSize:8,color:"#fff",marginBottom:10}}>TODAY</div>
+    {meals.length===0&&!wBurn&&!actBurn&&<div style={{...F,fontSize:7,color:"#555"}}>NO MEALS YET</div>}
+    {meals.map((m,i)=><div key={i} style={{borderBottom:"2px solid #333",paddingBottom:8,marginBottom:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0 4px"}}><span style={{...F,fontSize:7,color:"#fff"}}>{m.name.toUpperCase()}</span><span style={{...F,fontSize:7,color:"#fff"}}>{m.calories} KCAL</span></div>
+      {(m.ingredients||[]).map((ing,j)=><div key={j} style={{display:"flex",justifyContent:"space-between",paddingLeft:14}}><span style={{...F,fontSize:6,color:"#888"}}>{ing.name.toUpperCase()} {ing.grams}G</span><span style={{...F,fontSize:6,color:"#bbb"}}>{ing.calories}</span></div>)}</div>)}
+    {bmr&&<div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"2px solid #333"}}><span style={{...F,fontSize:7,color:"#555"}}>BMR (SEDENTARY)</span><span style={{...F,fontSize:7,color:"#bbb"}}>-{bmr}</span></div>}
+    {wBurn>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"2px solid #333"}}><span style={{...F,fontSize:7,color:"#555"}}>WORKOUT</span><span style={{...F,fontSize:7,color:"#bbb"}}>-{wBurn}</span></div>}
+    {(tLog?.activities||[]).map((a,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"2px solid #333"}}><span style={{...F,fontSize:7,color:"#555"}}>{a.name} {a.time}</span><span style={{...F,fontSize:7,color:"#bbb"}}>-{a.calories}</span></div>)}
+  </div>}
+
+/* ── HISTORY TAB ── */
+function HistoryTab({data,upd}){const[view,setView]=useState("w");const[showData,setShowData]=useState(false);
+  function exportData(){const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="peachfit_backup_"+td()+".json";a.click();URL.revokeObjectURL(url)}
+  function importData(e){const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(d.routines&&d.workoutLog){upd(()=>d);alert("Data restored! "+d.workoutLog.length+" workouts loaded.")}else alert("Invalid backup file.")}catch{alert("Error reading file.")}};reader.readAsText(file)}
+  return<div><Tl>HIGH SCORES</Tl>
+    <div style={{display:"flex",gap:6,marginBottom:16}}><Btn small white={view==="w"} onClick={()=>setView("w")}>WORKOUTS</Btn><Btn small white={view==="n"} onClick={()=>setView("n")}>NUTRITION</Btn></div>
+    {view==="w"&&<>{data.workoutLog.length===0&&<div style={{...F,fontSize:7,color:"#555"}}>NO RECORDS</div>}
+      {[...data.workoutLog].reverse().map(w=><Bx key={w.id} style={{marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{...F,fontSize:8,color:"#fff"}}>{(w.routineName||"?").toUpperCase()}</span><span style={{...F,fontSize:7,color:"#888"}}>{fmt(w.date)}</span></div>
+        {w.exercises.map(ex=><div key={ex.name} style={{...F,fontSize:7,color:"#bbb",marginBottom:4}}>{ex.name.toUpperCase()} <span style={{color:"#555"}}>{ex.sets.length}x</span>{ex.sets.length>0&&<span style={{color:"#fff"}}> {Math.max(...ex.sets.map(s=>parseFloat(s.weight)||0))}kg</span>}</div>)}
+        <div style={{...F,fontSize:7,color:"#888",marginTop:8,borderTop:"1px solid #333",paddingTop:8}}>~{w.totalCalories} KCAL</div></Bx>)}</>}
+    {view==="n"&&<>{data.nutritionLog.length===0&&<div style={{...F,fontSize:7,color:"#555"}}>NO RECORDS</div>}
+      {[...data.nutritionLog].reverse().map(n=>{const c=(n.meals||[]).reduce((s,m)=>s+m.calories,0);const t=calcBMR(data.profile||DEF.profile)||0;const b=c-(n.burned||0)-t;
+        return<Bx key={n.date} style={{marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{...F,fontSize:8,color:"#fff"}}>{fmt(n.date)}</span><span style={{...F,fontSize:8,color:"#fff"}}>{b>0?"+":""}{b}</span></div>
+          <div style={{...F,fontSize:7,color:"#555"}}>IN:{c} BURN:{(n.burned||0)+t}</div></Bx>})}</>}
+    <div style={{marginTop:20,borderTop:"2px solid #333",paddingTop:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><span style={{...F,fontSize:8,color:"#fff"}}>DATA</span><Btn small onClick={()=>setShowData(!showData)}>{showData?"CLOSE":"MANAGE"}</Btn></div>
+      {showData&&<div><Btn full onClick={exportData} style={{marginBottom:8,fontSize:7}}>EXPORT BACKUP</Btn>
+        <label style={{display:"block"}}><Btn full white style={{fontSize:7,position:"relative"}}>IMPORT BACKUP<input type="file" accept=".json" onChange={importData} style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",opacity:0,cursor:"pointer"}}/></Btn></label>
+        <div style={{...F,fontSize:5,color:"#555",marginTop:8,lineHeight:1.8,textAlign:"center"}}>EXPORT SAVES ALL DATA AS A FILE.<br/>IMPORT RESTORES FROM BACKUP.</div></div>}
+    </div></div>}
+
+ReactDOM.render(<App/>,document.getElementById("root"));
+</script>
+<script>if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{})</script>
+</body>
+</html>
